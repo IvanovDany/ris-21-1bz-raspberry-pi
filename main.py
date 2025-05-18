@@ -165,5 +165,5 @@ while 1:
   # Запись температуры в файл
   log_temperature(temp)
   
-  time.sleep(1)
+  time.sleep(60)
   
