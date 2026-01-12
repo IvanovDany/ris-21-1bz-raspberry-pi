@@ -49,8 +49,10 @@ logging.basicConfig(
 # LCD
 # =========
 
-# Класс для управления LCD 16x2 в 4-битном режиме
 class LCD:
+    """
+    Класс для управления LCD 16x2 в 4-битном режиме
+    """
     def __init__(self, rs, e, d4, d5, d6, d7):
 	# Сохраняем номера GPIO пинов
         self.rs = rs
@@ -66,8 +68,8 @@ class LCD:
 	# Инициализируем LCD
         self.init()
 
-    # Инициализация LCD
     def init(self):
+        """Инициализация LCD"""
         self._write_byte(0x33, False)	# Отправка старших 4 бит
         self._write_byte(0x32, False)	# Переключение в 4-битный режим
         self._write_byte(0x06, False)	# Направление курсора
@@ -75,28 +77,38 @@ class LCD:
         self._write_byte(0x28, False)	# 2 строки, шрифт 5x8
         self.clear()
 
-    # Очистка экрана LCD
     def clear(self):
+        """Очистка экрана LCD"""
         self._write_byte(0x01, False)
         time.sleep(E_DELAY)
 
-    # Вывод строки на LCD
     def display(self, message, line):
+        """
+        Выводит строку на LCD
+
+        message - текст
+        line - LCD_LINE_1 или LCD_LINE_2
+        """
         message = message.ljust(LCD_WIDTH)
         self._write_byte(line, False)
         for c in message:
             self._write_byte(ord(c), True)
 
-    # Формирование импульса на пине Enable
     def _toggle_enable(self):
+        """Формирует импульс на пине Enable"""
         time.sleep(E_DELAY)
         GPIO.output(self.e, True)
         time.sleep(E_PULSE)
         GPIO.output(self.e, False)
         time.sleep(E_DELAY)
 
-    # Отправка байт в LCD
     def _write_byte(self, bits, mode):
+        """
+        Отправляет байт в LCD
+
+        bits - данные или команда
+        mode - True для символа, False для команды
+        """
         GPIO.output(self.rs, mode)
 	
 	# Старшие 4 бита
@@ -131,19 +143,27 @@ class LCD:
 # SPI и MCP3208
 # ==============
 
-# Открытие SPI интерфейса
 def init_spi():
+    """Открывает SPI интерфейс"""
     spi = spidev.SpiDev()
     spi.open(SPI_BUS, SPI_DEVICE)
     return spi
 
-# Считывание данных с MCP3208
 def read_adc(spi, channel):
+    """
+    Считывает данные с MCP3208
+
+    channel - номер канала 0..7
+    """
     r = spi.xfer2([1, (8 + channel) << 4, 0])
     return ((r[1] & 3) << 8) + r[2]
 
-# Преобразование значения АЦП в температуру для LM35
 def convert_temperature(adc):
+    """
+    Преобразует значение АЦП в температуру для LM35
+
+    LM35 выдает 10 мВ на 1 градус
+    """
     voltage = (adc * 3.3) / 1023.0
     return voltage * 100
 
