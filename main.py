@@ -1,190 +1,169 @@
-# -*- coding: utf-8 -*-
+import spidev  # Импортирует библиотеку для работы с SPI-интерфейсом
+import time    # Импортирует библиотеку для работы со временем
+import os      # Импортирует библиотеку для взаимодействия с операционной системой
+import RPi.GPIO as GPIO  # Импортирует библиотеку для управления GPIO-пинами Raspberry Pi
+GPIO.setmode(GPIO.BOARD)  # Устанавливает режим нумерации GPIO-пинов на BOARD (физические номера пинов)
+GPIO.setwarnings(False) # Отключает предупреждения GPIO
 
-import os
-import time
-import logging
-import spidev
-import RPi.GPIO as GPIO
+spi = spidev.SpiDev()  # Создает объект SPI
+spi.open(0,0)          # Открывает SPI-порт 0, устройство (CE) 0
 
-# ==========================================================
-#                 КОНСТАНТЫ И НАСТРОЙКИ
-# ==========================================================
 
-SPI_BUS = 0
-SPI_DEVICE = 0
-ADC_CHANNEL = 0
+temp_channel  = 0 # Определяет номер канала АЦП, к которому подключен датчик температуры
 
-LCD_WIDTH = 16
-LCD_LINE_1 = 0x80
-LCD_LINE_2 = 0xC0
+# Описание пинов для LCD:
 
-# GPIO пины LCD (BOARD numbering)
+# Описание GPIO для LCD
 LCD_RS = 15
-LCD_E = 16
+LCD_E  = 16
 LCD_D4 = 7
 LCD_D5 = 11
 LCD_D6 = 12
 LCD_D7 = 13
 
-# Задержки для LCD
+# Констатны задержки
 E_PULSE = 0.0005
 E_DELAY = 0.0005
+delay = 1
 
-# Путь для логов
-LOG_DIR = r"C:\Users\danii\Documents\ProteusProjects\ris-21-1bz-raspberry-pi"
-LOG_FILE = "temperature_log.txt"
+GPIO.setup(LCD_E, GPIO.OUT)  # E
+GPIO.setup(LCD_RS, GPIO.OUT) # RS
+GPIO.setup(LCD_D4, GPIO.OUT) # D4
+GPIO.setup(LCD_D5, GPIO.OUT) # D5
+GPIO.setup(LCD_D6, GPIO.OUT) # D6
+GPIO.setup(LCD_D7, GPIO.OUT) # D7
 
-# ==========================================================
-#                        ЛОГИРОВАНИЕ
-# ==========================================================
+# Константы LCD
+LCD_WIDTH = 16    # Максимальное количество символов на экране
+LCD_CHR = True    # Константа для передачи символьных данных на LCD
+LCD_CMD = False   # Константа для передачи команд на LCD
+LCD_LINE_1 = 0x80 # LCD RAM адрес для первой линии экрана
+LCD_LINE_2 = 0xC0 # LCD RAM адрес для второй линии экрана
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, LOG_FILE)),
-        logging.StreamHandler()
-    ]
-)
+# Функция для инициализации LCD
+def lcd_init():
+  lcd_byte(0x33,LCD_CMD) # 110011 (Отправка старых 4 бит)
+  lcd_byte(0x32,LCD_CMD) # 110010 (Отправка младших 4 бит)
+  lcd_byte(0x06,LCD_CMD) # 000110 (Направление движения курсора)
+  lcd_byte(0x0C,LCD_CMD) # 001100 (Включение дисплея, выключение курсора, выключение мигания)
+  lcd_byte(0x28,LCD_CMD) # 101000 (Длина данных (4 бита), количество строк (2), размер шрифта (5x8 точек))
+  lcd_byte(0x01,LCD_CMD) # 000001 (Очистка дисплея (очищает дисплей и устанавливает курсор в начало))
+  time.sleep(E_DELAY) # Задержка после инициализации
 
-# ==========================================================
-#                        КЛАСС LCD
-# ==========================================================
+ # Функция для преобразовывания байтовых данные в биты и отправления на порт LCD
+def lcd_byte(bits, mode):
+  # bits = данные
+  # mode = True  для символа, False для команды
+ 
+  GPIO.output(LCD_RS, mode) # RS
+ 
+  # Старшие биты (Отправка старших 4 бит)
+  GPIO.output(LCD_D4, False)
+  GPIO.output(LCD_D5, False)
+  GPIO.output(LCD_D6, False)
+  GPIO.output(LCD_D7, False)
+  if bits&0x10==0x10:
+    GPIO.output(LCD_D4, True)
+  if bits&0x20==0x20:
+    GPIO.output(LCD_D5, True)
+  if bits&0x40==0x40:
+    GPIO.output(LCD_D6, True)
+  if bits&0x80==0x80:
+    GPIO.output(LCD_D7, True)
+ 
+  # Переключение пина 'Enable' (Импульс на линии Enable для фиксации данных)
+  lcd_toggle_enable()
+ 
+  # Младшие биты (отправка младших 4 бит)
+  GPIO.output(LCD_D4, False)
+  GPIO.output(LCD_D5, False)
+  GPIO.output(LCD_D6, False)
+  GPIO.output(LCD_D7, False)
+  if bits&0x01==0x01:
+    GPIO.output(LCD_D4, True)
+  if bits&0x02==0x02:
+    GPIO.output(LCD_D5, True)
+  if bits&0x04==0x04:
+    GPIO.output(LCD_D6, True)
+  if bits&0x08==0x08:
+    GPIO.output(LCD_D7, True)
+ 
+ # Переключение пина 'Enable' (Еще один импульс для фиксации младших 4 бит)
+  lcd_toggle_enable()
 
-class LCD:
-    """
-    Класс для управления LCD 16x2 в 4-битном режиме
-    """
+ # Функция для переключения пина Enable
+def lcd_toggle_enable():
+  time.sleep(E_DELAY)
+  GPIO.output(LCD_E, True)
+  time.sleep(E_PULSE)
+  GPIO.output(LCD_E, False)
+  time.sleep(E_DELAY)
 
-    def __init__(self, rs, e, d4, d5, d6, d7):
-        self.rs = rs
-        self.e = e
-        self.d4 = d4
-        self.d5 = d5
-        self.d6 = d6
-        self.d7 = d7
+ # Функция для вывода сообщения на LCD
+def lcd_string(message,line):
+  message = message.ljust(LCD_WIDTH," ") # Дополняет строку пробелами до ширины LCD
+ 
+  lcd_byte(line, LCD_CMD) # Отправляет команду для установки курсора на нужную строку
+ 
+  for i in range(LCD_WIDTH):
+    lcd_byte(ord(message[i]),LCD_CHR) # Отправляет каждый символ строки на LCD
 
-        GPIO.setup([rs, e, d4, d5, d6, d7], GPIO.OUT)
-        self.init()
 
-    def init(self):
-        self._write_byte(0x33, False)
-        self._write_byte(0x32, False)
-        self._write_byte(0x06, False)
-        self._write_byte(0x0C, False)
-        self._write_byte(0x28, False)
-        self.clear()
 
-    def clear(self):
-        self._write_byte(0x01, False)
-        time.sleep(E_DELAY)
+ 
+# Функция для чтения данных SPI с чипа MCP3008
+# Канал должен быть целым числом от 0 до 7
+def ReadChannel(channel):
+  adc = spi.xfer2([1,(8+channel)<<4,0]) # [1, (8+channel)<<4, 0] - формат команды для MCP3008
+  data = ((adc[1]&3) << 8) + adc[2] # Обрабатывает полученные байты для получения 10-битного значения АЦП
+  return data
 
-    def display(self, message, line):
-        message = message.ljust(LCD_WIDTH)
-        self._write_byte(line, False)
-
-        for char in message:
-            self._write_byte(ord(char), True)
-
-    def _toggle_enable(self):
-        time.sleep(E_DELAY)
-        GPIO.output(self.e, True)
-        time.sleep(E_PULSE)
-        GPIO.output(self.e, False)
-        time.sleep(E_DELAY)
-
-    def _write_byte(self, bits, mode):
-        GPIO.output(self.rs, mode)
-
-        for pin in [self.d4, self.d5, self.d6, self.d7]:
-            GPIO.output(pin, False)
-
-        if bits & 0x10:
-            GPIO.output(self.d4, True)
-        if bits & 0x20:
-            GPIO.output(self.d5, True)
-        if bits & 0x40:
-            GPIO.output(self.d6, True)
-        if bits & 0x80:
-            GPIO.output(self.d7, True)
-
-        self._toggle_enable()
-
-        for pin in [self.d4, self.d5, self.d6, self.d7]:
-            GPIO.output(pin, False)
-
-        if bits & 0x01:
-            GPIO.output(self.d4, True)
-        if bits & 0x02:
-            GPIO.output(self.d5, True)
-        if bits & 0x04:
-            GPIO.output(self.d6, True)
-        if bits & 0x08:
-            GPIO.output(self.d7, True)
-
-        self._toggle_enable()
-
-# ==========================================================
-#                  SPI и MCP3208
-# ==========================================================
-
-def init_spi():
+ 
+# Функция для расчета температуры из данных TMP36, округленной до указанного количества десятичных знаков
+def ConvertTemp(data,places):
+ 
+  # Значение АЦП
+  # (знач.)  Темп.  Вольт.
+  #   0       -50       0.00
+  #  78       -25      0.25
+  # 155        0       0.50
+  # 233       25      0.75
+  # 310       50      1.00
+  # 465      100     1.50
+  # 775      200     2.50
+  # 1023     280    3.30
+ 
+  temp = ((data * 330)/float(1023)) # Преобразует значение АЦП (0-1023) в приблизительное напряжение (0-3.3V) и затем в температур
+  temp = round(temp,places)
+  return temp
+ 
+# Функция для записи температуры в файл
+def log_temperature(temperature, filename="temperature_log.txt"):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    home_dir = os.path.expanduser("~")
+    full_path = os.path.join(home_dir, filename)
     try:
-        spi = spidev.SpiDev()
-        spi.open(SPI_BUS, SPI_DEVICE)
-        return spi
-    except Exception as e:
-        logging.critical("Ошибка открытия SPI: %s", e)
-        raise
+        with open(full_path, "a", encoding="utf-8") as file:
+            file.write(f"{timestamp}: {temperature} *C\n")
+    except IOError as e:
+        print(f"Error: {e}")
 
 
-def read_adc(spi, channel):
-    adc = spi.xfer2([1, (8 + channel) << 4, 0])
-    return ((adc[1] & 3) << 8) + adc[2]
-
-
-def convert_temperature(adc_value, decimals=2):
-    voltage = (adc_value * 3.3) / 1023.0
-    temperature = voltage * 100
-    return round(temperature, decimals)
-
-# ==========================================================
-#                        MAIN
-# ==========================================================
-
-def main():
-    GPIO.setmode(GPIO.BOARD)
-    GPIO.setwarnings(False)
-
-    lcd = LCD(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7)
-    spi = init_spi()
-
-    lcd.display("Welcome!", LCD_LINE_1)
-    time.sleep(2)
-    lcd.clear()
-
-    logging.info("App started")
-
-    try:
-        while True:
-            adc_value = read_adc(spi, ADC_CHANNEL)
-            temperature = convert_temperature(adc_value)
-
-            lcd.display("Temperature", LCD_LINE_1)
-            lcd.display(f"{temperature:.2f} C", LCD_LINE_2)
-
-            logging.info("Temperature: %.2f C", temperature)
-            time.sleep(60)
-
-    except KeyboardInterrupt:
-        logging.info("Program stopped")
-
-    finally:
-        lcd.clear()
-        GPIO.cleanup()
-        spi.close()
-        logging.info("GPIO cleaned and SPI closed")
-
-
-if __name__ == "__main__":
-    main()
+# Определяет задержку между показаниями
+delay = 5
+lcd_init()
+lcd_string("Welcome! ",LCD_LINE_1)
+time.sleep(2)
+while 1:
+  temp_level = ReadChannel(temp_channel) 
+  temp = ConvertTemp(temp_level,2)
+ 
+  # Вывод на LCD температуры
+  lcd_string("Temperature  ",LCD_LINE_1)
+  lcd_string(str(temp),LCD_LINE_2)
+  
+  # Запись температуры в файл
+  log_temperature(temp)
+  
+  time.sleep(60)
+  
